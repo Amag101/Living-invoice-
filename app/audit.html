@@ -1,0 +1,214 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Invisible Audit Log</title>
+<link rel="stylesheet" href="/style.css">
+<style>
+  .wrap { max-width: 1080px; margin: 0 auto; padding: 24px; display: grid; gap: 24px; }
+  h1 { font-size: 22px; margin: 0 0 4px; }
+  h2 { font-size: 13px; font-weight: 600; color: var(--ink-3); text-transform: uppercase; letter-spacing: .05em; margin: 0 0 8px; }
+  .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: 12px; }
+  .auto { padding: 14px 16px; display: grid; gap: 6px; align-content: start; }
+  .auto .name { font-weight: 600; }
+  .auto .rule { color: var(--ink-2); font-size: 13px; }
+  .conn { display: flex; justify-content: space-between; gap: 12px; padding: 10px 16px; border-bottom: 1px solid var(--line); flex-wrap: wrap; }
+  .conn:last-child { border-bottom: none; }
+  .log-table td:first-child { white-space: nowrap; color: var(--ink-2); font-variant-numeric: tabular-nums; }
+  .what { font-weight: 550; }
+  .why { color: var(--ink-2); font-size: 13px; margin-top: 2px; }
+  .steps { margin: 6px 0 0; padding-left: 18px; color: var(--ink-2); font-size: 12.5px; }
+  .filters { display: flex; gap: 8px; align-items: center; margin-bottom: 8px; flex-wrap: wrap; }
+  .filters h2 { margin: 0; flex: 1; }
+  .filters select { width: auto; }
+  .banner { padding: 12px 16px; border-radius: var(--radius); }
+  .banner.ok { background: var(--accent-soft); color: var(--accent); }
+  .banner.err { background: var(--bad-soft); color: var(--bad); }
+  .gcard { padding: 16px; display: grid; gap: 12px; }
+  .gcard .row { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+  .gcard ol { margin: 0; padding-left: 20px; color: var(--ink-2); display: grid; gap: 4px; }
+  .gcard code { background: var(--surface-2); border: 1px solid var(--line); border-radius: 4px; padding: 1px 5px; font-size: 12.5px; overflow-wrap: anywhere; }
+  .kv { display: grid; grid-template-columns: max-content 1fr; gap: 4px 16px; font-size: 13px; }
+  .kv dt { color: var(--ink-3); }
+  .kv dd { margin: 0; overflow-wrap: anywhere; }
+  .switch { display: flex; gap: 10px; align-items: flex-start; padding: 12px; border: 1px solid var(--line); border-radius: 8px; background: var(--surface-2); }
+  .switch input { width: auto; margin-top: 3px; }
+  @media (max-width: 640px) {
+    .wrap { padding: 16px; }
+    .log-table thead { display: none; }
+    .log-table tr { display: grid; grid-template-columns: 1fr auto; padding: 8px 0; border-bottom: 1px solid var(--line); }
+    .log-table td { border: none; padding: 4px 12px; }
+    .log-table td.main { grid-column: 1 / -1; }
+  }
+</style>
+</head>
+<body>
+<header class="topbar">
+  <div class="brand"><span class="mark" aria-hidden="true"></span>Invisible <span class="tag">audit log</span></div>
+  <div class="hint">Every action, why it happened, and how to reverse it. This is the only page the product keeps.</div>
+  <nav><a href="/"><button>Back to demo</button></a></nav>
+</header>
+<main class="wrap">
+  <div>
+    <h1>Kora Studio</h1>
+    <div class="muted">Simulated time: <span id="now">…</span></div>
+  </div>
+  <section>
+    <h2>Automations</h2>
+    <div class="grid" id="autos"></div>
+  </section>
+  <div id="banner" hidden></div>
+  <section>
+    <h2>Google account</h2>
+    <div class="card gcard" id="google"></div>
+  </section>
+  <section>
+    <h2>Connections</h2>
+    <div class="card" id="conns"></div>
+  </section>
+  <section>
+    <div class="filters">
+      <h2>Activity</h2>
+      <label class="faint" for="filter">Show</label>
+      <select id="filter">
+        <option value="actions">Actions and decisions</option>
+        <option value="all">Everything</option>
+      </select>
+    </div>
+    <div class="card" style="overflow-x:auto"><table class="log-table">
+      <thead><tr><th>When</th><th>What happened</th><th>By</th><th></th></tr></thead>
+      <tbody id="log"></tbody>
+    </table></div>
+  </section>
+</main>
+<script>
+const $ = (s) => document.querySelector(s);
+const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+const when = (iso) => new Date(iso).toLocaleString("en-GB", { weekday: "short", day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit" });
+const EVENT = {
+  proposed: ["Proposed", ""], approved: ["Approved", "good"], executed: ["Done", "good"], skipped: ["Skipped", ""],
+  cancelled: ["Withdrawn", ""], undone: ["Undone", "warn"], failed: ["Failed", "bad"], observed: ["Watched", ""],
+  trust_changed: ["Trust", "warn"], automation_saved: ["Rule saved", "good"], paused: ["Paused", "warn"], resumed: ["Resumed", "good"],
+  connected: ["Connected", "good"], disconnected: ["Disconnected", "warn"], connection_lost: ["Access lost", "bad"], setting_changed: ["Setting", "warn"],
+};
+let last = "";
+
+async function load() {
+  const d = await (await fetch("/api/audit")).json();
+  const key = JSON.stringify(d) + $("#filter").value;
+  if (key === last) return;
+  last = key;
+  $("#now").textContent = d.now_nice;
+  renderGoogle(d.google);
+  $("#autos").innerHTML = d.automations.map((a) => `
+    <div class="card auto">
+      <div class="name">${esc(a.name)}</div>
+      <div><span class="pill ${a.enabled ? (a.trust.startsWith("automatic") ? "good" : "") : "warn"}">${a.enabled ? esc(a.trust) : "paused"}</span></div>
+      <div class="rule">${esc(a.rule)}</div>
+    </div>`).join("");
+  $("#conns").innerHTML = d.connectors.map((c) => `
+    <div class="conn"><span>${esc(c.name)}</span><span class="pill ${c.status.startsWith("off") ? "" : "good"}">${esc(c.status)}</span></div>`).join("");
+  const all = $("#filter").value === "all";
+  const rows = d.log.filter((r) => all || r.event !== "proposed" || r.proposal_status === "pending");
+  $("#log").innerHTML = rows.map((r) => {
+    const [word, cls] = EVENT[r.event] || [r.event, ""];
+    const steps = (r.data.steps || []).map((s) => `<li>${esc(s.label)}${s.inverse ? "" : s.connector === "owner" ? "" : " <span class=faint>(can't be reversed)</span>"}</li>`).join("");
+    const reversed = (r.data.reversed || []).map((s) => `<li>${esc(s)}</li>`).join("");
+    const kept = (r.data.not_reversible || []).map((s) => `<li>Not reversible: ${esc(s)}</li>`).join("");
+    const canUndo = r.event === "executed" && r.proposal_status === "executed" && r.kind === "action"
+      && (r.data.steps || []).some((s) => s.inverse);
+    return `<tr>
+      <td>${esc(when(r.at))}</td>
+      <td class="main"><span class="pill ${cls}">${word}</span> <span class="what">${esc(r.detail)}</span>
+        ${r.data.why ? `<div class="why">Why: ${esc(r.data.why)}</div>` : ""}
+        ${r.data.limits && r.data.limits.length ? `<div class="why">Needs approval: ${esc(r.data.limits.join(", "))}</div>` : ""}
+        ${steps || reversed || kept ? `<ul class="steps">${steps}${reversed}${kept}</ul>` : ""}</td>
+      <td>${r.actor === "owner" ? "You" : "Invisible"}</td>
+      <td>${canUndo ? `<button class="small" data-undo="${r.proposal_id}">Undo</button>` : ""}</td>
+    </tr>`;
+  }).join("") || `<tr><td colspan="4" class="faint" style="text-align:center;padding:28px">No activity yet.</td></tr>`;
+}
+
+function renderGoogle(g) {
+  let html;
+  if (!g.crypto) {
+    html = `<div>Encrypted token storage needs the <code>cryptography</code> package. Run <code>pip3 install cryptography</code> and restart the server.</div>`;
+  } else if (!g.configured) {
+    html = `<div><strong>Connect Gmail and Google Calendar.</strong> First create a Google OAuth client (one-time setup):</div>
+      <ol>
+        <li>In Google Cloud Console, create a project and enable the <strong>Gmail API</strong> and <strong>Google Calendar API</strong>.</li>
+        <li>Set up the OAuth consent screen as <em>External</em>, in testing mode, and add your Google address as a test user.</li>
+        <li>Create an OAuth client ID of type <strong>Web application</strong> with this redirect URI: <code>${esc(g.redirect_uri)}</code></li>
+        <li>Download the client JSON, save it as <code>google_client.json</code> next to <code>server.py</code>, and restart the server.</li>
+      </ol>`;
+  } else if (!g.connected) {
+    html = `<div>Invisible will ask Google for two permissions: <strong>send email as you</strong> (it can't read your inbox) and <strong>see and edit your calendar events</strong>. Tokens are encrypted before they're stored.</div>
+      <div class="row"><a href="/oauth/google/start"><button class="primary">Connect Google</button></a></div>`;
+  } else {
+    const bad = g.status !== "connected";
+    html = `<dl class="kv">
+        <dt>Account</dt><dd>${esc(g.account)} <span class="pill ${bad ? "bad" : "good"}">${bad ? "needs reconnecting" : "connected"}</span></dd>
+        <dt>Calendar</dt><dd>${g.last_sync ? "synced " + esc(when(g.last_sync)) : "not synced yet"}, every ${g.sync_seconds} seconds</dd>
+        ${g.last_error ? `<dt>Last error</dt><dd>${esc(g.last_error)}</dd>` : ""}
+      </dl>
+      <label class="switch"><input type="checkbox" id="live" ${g.live_email ? "checked" : ""}>
+        <span><strong>Send emails to clients for real</strong><br><span class="faint">${g.live_email
+          ? "On: invoices and reminders go to your clients' real addresses from your Gmail."
+          : "Off (test mode): every email meant for a client is sent to you instead, marked with who it was for."}</span></span></label>
+      <div class="row">
+        ${bad ? `<a href="/oauth/google/start"><button class="primary">Reconnect Google</button></a>` : `<button id="gsync">Sync now</button>`}
+        <button id="gdisc">Disconnect</button>
+      </div>
+      <div class="faint">To bill a job, add #done to the event title in Google Calendar. Invisible takes the client from the event's guests and the amount from its description, for example "Amount: 1200".</div>`;
+  }
+  if ($("#google").dataset.html !== html) { $("#google").innerHTML = html; $("#google").dataset.html = html; }
+}
+
+async function postJSON(path, body) {
+  const r = await fetch(path, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body || {}) });
+  const data = await r.json();
+  if (!r.ok) showBanner(data.error || "Something went wrong", false);
+  last = ""; load();
+  return data;
+}
+
+function showBanner(text, ok) {
+  const b = $("#banner");
+  b.className = "banner " + (ok ? "ok" : "err");
+  b.textContent = text;
+  b.hidden = false;
+}
+
+(function () {
+  const p = new URLSearchParams(location.search);
+  if (p.get("google") === "connected") showBanner("Google connected. Invisible is now reading your calendar and sends email through Gmail.", true);
+  if (p.get("google_error")) showBanner(p.get("google_error"), false);
+  if (p.toString()) history.replaceState(null, "", "/audit");
+})();
+
+document.addEventListener("change", (e) => {
+  if (e.target.id !== "live") return;
+  const on = e.target.checked;
+  if (on && !confirm("Send invoices and reminders to clients' real email addresses?")) { e.target.checked = false; return; }
+  postJSON("/api/settings/live_email", { on });
+});
+
+document.addEventListener("click", async (e) => {
+  if (e.target.closest("#gsync")) { e.target.disabled = true; await postJSON("/api/connections/google/sync"); return; }
+  if (e.target.closest("#gdisc")) {
+    if (confirm("Disconnect Google? Your stored tokens will be deleted and access revoked.")) await postJSON("/api/connections/google/disconnect");
+    return;
+  }
+  const b = e.target.closest("[data-undo]");
+  if (!b) return;
+  b.disabled = true;
+  await fetch("/api/chat", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ text: "undo #" + b.dataset.undo }) });
+  last = ""; load();
+});
+$("#filter").addEventListener("change", load);
+load();
+setInterval(load, 3000);
+</script>
+</body>
+</html>

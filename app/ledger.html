@@ -1,0 +1,211 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Money Ledger</title>
+<script src="https://cdn.jsdelivr.net/npm/ag-grid-community@33.0.3/dist/ag-grid-community.min.js"></script>
+<style>
+  :root {
+    --bg: #f6f5f1; --card: #ffffff; --ink: #1d1d1b; --muted: #6b6a65; --line: #e6e3db;
+    --accent: #1f5f4a; --accent-ink: #ffffff; --soft: #eef4f1;
+    --good: #1f6f3f; --good-bg: #e7f4ec; --warn: #8a5a00; --warn-bg: #fff3d6; --bad: #a3261e; --bad-bg: #fde8e6;
+    --shadow: 0 1px 2px rgba(0,0,0,.04), 0 4px 16px rgba(0,0,0,.04);
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg: #151514; --card: #1e1e1c; --ink: #ecebe6; --muted: #a09e97; --line: #33322f;
+      --accent: #5fb898; --accent-ink: #0f1f19; --soft: #1d2a25;
+      --good: #7fd3a0; --good-bg: #1b2b21; --warn: #f0c060; --warn-bg: #2d2617; --bad: #ff8a80; --bad-bg: #351c1a;
+      --shadow: none;
+    }
+  }
+  :root[data-theme="dark"] {
+    --bg: #151514; --card: #1e1e1c; --ink: #ecebe6; --muted: #a09e97; --line: #33322f;
+    --accent: #5fb898; --accent-ink: #0f1f19; --soft: #1d2a25;
+    --good: #7fd3a0; --good-bg: #1b2b21; --warn: #f0c060; --warn-bg: #2d2617; --bad: #ff8a80; --bad-bg: #351c1a;
+    --shadow: none;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--ink);
+         font: 14px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", Inter, Roboto, sans-serif; }
+  .wrap { max-width: 1280px; margin: 0 auto; padding: 22px 16px 40px; }
+  header { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; margin-bottom: 16px; }
+  header h1 { font-size: 20px; margin: 0; letter-spacing: -.01em; }
+  header .sub { color: var(--muted); }
+  header nav { margin-left: auto; display: flex; gap: 8px; }
+  header nav a { color: var(--accent); text-decoration: none; font-weight: 600; }
+  .kpis { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 10px; margin-bottom: 14px; }
+  @media (max-width: 960px) { .kpis { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
+  @media (max-width: 520px) { .kpis { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+  .kpi { background: var(--card); border: 1px solid var(--line); border-radius: 12px; padding: 12px 14px; box-shadow: var(--shadow); }
+  .kpi .l { color: var(--muted); font-size: 12px; }
+  .kpi .v { font-size: 22px; font-weight: 700; letter-spacing: -.02em; font-variant-numeric: tabular-nums; }
+  .kpi .h { color: var(--muted); font-size: 12px; }
+  .bar { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-bottom: 10px; }
+  .bar input { font: inherit; padding: 8px 10px; border-radius: 10px; border: 1px solid var(--line); background: var(--card);
+               color: var(--ink); min-width: 0; flex: 1 1 220px; max-width: 340px; }
+  .seg { display: inline-flex; border: 1px solid var(--line); border-radius: 10px; overflow: hidden; }
+  .seg button { font: inherit; border: 0; background: var(--card); color: var(--ink); padding: 7px 12px; cursor: pointer; }
+  .seg button + button { border-left: 1px solid var(--line); }
+  .seg button[aria-pressed="true"] { background: var(--accent); color: var(--accent-ink); }
+  .live { margin-left: auto; color: var(--muted); font-size: 12px; }
+  .grid-card { background: var(--card); border: 1px solid var(--line); border-radius: 12px; overflow: hidden; box-shadow: var(--shadow); }
+  #grid { height: min(620px, calc(100vh - 290px)); min-height: 360px; width: 100%; }
+  .pill { display: inline-block; font-size: 12px; line-height: 18px; padding: 0 8px; border-radius: 999px; font-weight: 600;
+          background: var(--soft); color: var(--accent); }
+  .pill.good { background: var(--good-bg); color: var(--good); }
+  .pill.warn { background: var(--warn-bg); color: var(--warn); }
+  .pill.bad { background: var(--bad-bg); color: var(--bad); }
+  .pill.muted { background: transparent; color: var(--muted); border: 1px solid var(--line); }
+  .neg { color: var(--bad); }
+  .ag-cell[col-id="undo"] { display: flex; align-items: center; }
+  .undo { font: inherit; font-size: 12px; line-height: 18px; padding: 2px 10px; border-radius: 8px; border: 1px solid var(--line);
+          background: var(--card); color: var(--ink); cursor: pointer; }
+  .rules { margin-top: 14px; background: var(--card); border: 1px solid var(--line); border-radius: 12px; padding: 14px 16px; box-shadow: var(--shadow); }
+  .rules h2 { font-size: 13px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); margin: 0 0 8px; }
+  .rules ul { margin: 0; padding-left: 18px; columns: 2; column-gap: 32px; }
+  @media (max-width: 720px) { .rules ul { columns: 1; } }
+  .rules .h { color: var(--muted); font-size: 13px; margin-top: 8px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <h1 id="title">Money ledger</h1>
+    <span class="sub" id="now"></span>
+    <nav><a href="/">Owner view</a><a href="/audit">Audit log</a></nav>
+  </header>
+  <section class="kpis" id="kpis" aria-label="Totals"></section>
+  <div class="bar">
+    <input id="q" type="search" placeholder="Search client, invoice, reason…" aria-label="Search the ledger">
+    <div class="seg" id="kinds" role="group" aria-label="Show">
+      <button aria-pressed="true" data-k="">All</button><button aria-pressed="false" data-k="Request">Requests</button>
+      <button aria-pressed="false" data-k="Payment">Payments</button><button aria-pressed="false" data-k="Payout">Payouts</button>
+      <button aria-pressed="false" data-k="Invoice">Invoices</button>
+    </div>
+    <span class="live" id="live">Live</span>
+  </div>
+  <div class="grid-card"><div id="grid"></div></div>
+  <section class="rules" id="rules"></section>
+</div>
+<script>
+const $ = (s) => document.querySelector(s);
+const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+let L = null, api = null, kind = "";
+
+function cash(x) {
+  if (x === null || x === undefined || x === "") return "";
+  const v = Math.round(Number(x) * 100) / 100, a = Math.abs(v);
+  const s = Number.isInteger(a) ? a.toLocaleString("en-US") : a.toLocaleString("en-US", {minimumFractionDigits: 2, maximumFractionDigits: 2});
+  return (v < 0 ? "−" : "") + (L ? L.currency : "$") + s;
+}
+
+const STATUS = {applied: "good", approved: "good", paid: "good", received: "good", success: "good", succeeded: "good",
+  pending_owner: "warn", sent: "", unclaimed: "warn", pending: "warn", countered: "warn",
+  denied: "bad", declined: "bad", void: "muted", cancelled: "muted", returned: "muted", reverted: "muted", failed: "bad"};
+const LABEL = {pending_owner: "waiting for you", applied: "applied", denied: "blocked", sent: "open", void: "cancelled"};
+const VERDICT = {ALLOW: ["good", "Agent agreed"], ESCALATE: ["warn", "Asked you"], DENY: ["bad", "Blocked"], OWNER: ["", "Your counter"]};
+
+const pill = (cls, text) => `<span class="pill ${cls}">${esc(text)}</span>`;
+
+const columns = [
+  {field: "when", headerName: "When", width: 150, sort: null, comparator: (a, b, x, y) => (x.data.at || "").localeCompare(y.data.at || "")},
+  {field: "kind", headerName: "Type", width: 105, filter: true},
+  {field: "invoice", headerName: "Invoice", width: 105, filter: true},
+  {field: "client", headerName: "Client / payee", width: 160, filter: true},
+  {field: "what", headerName: "What", flex: 2, minWidth: 260, tooltipField: "what", wrapText: false},
+  {field: "verdict", headerName: "Policy", width: 130,
+   cellRenderer: (p) => p.value ? pill(...VERDICT[p.value]) : ""},
+  {field: "status", headerName: "Status", width: 140, enableCellChangeFlash: true,
+   cellRenderer: (p) => p.value ? pill(STATUS[p.value] ?? "", LABEL[p.value] || p.value.replace(/_/g, " ")) : ""},
+  {field: "amount", headerName: "Amount", width: 120, type: "rightAligned", enableCellChangeFlash: true,
+   valueFormatter: (p) => cash(p.value), cellClass: (p) => p.value < 0 ? "neg" : ""},
+  {field: "by", headerName: "By", width: 140},
+  {field: "why", headerName: "Why", flex: 1, minWidth: 200, tooltipField: "why"},
+  {field: "undo", headerName: "", width: 90, sortable: false, filter: false, pinned: "right",
+   cellRenderer: (p) => p.value ? `<button class="undo" data-undo="${Number(p.value)}">Undo</button>` : ""},
+];
+
+function makeGrid() {
+  const dark = document.documentElement.dataset.theme === "dark" ||
+    (document.documentElement.dataset.theme !== "light" && matchMedia("(prefers-color-scheme: dark)").matches);
+  if (agGrid.ModuleRegistry && agGrid.AllCommunityModule) agGrid.ModuleRegistry.registerModules([agGrid.AllCommunityModule]);
+  let theme = agGrid.themeQuartz;
+  if (theme && dark && agGrid.colorSchemeDark) theme = theme.withPart(agGrid.colorSchemeDark);
+  api = agGrid.createGrid($("#grid"), {
+    theme, columnDefs: columns, rowData: [], getRowId: (p) => p.data.id,
+    defaultColDef: {sortable: true, resizable: true, suppressHeaderMenuButton: true},
+    rowHeight: 40, headerHeight: 38, animateRows: true, tooltipShowDelay: 300,
+    isExternalFilterPresent: () => !!kind, doesExternalFilterPass: (n) => n.data.kind === kind,
+    overlayNoRowsTemplate: '<span style="color:var(--muted)">Nothing yet. Finish a job in the owner view to send the first invoice.</span>',
+  });
+}
+
+function renderKpis() {
+  const k = L.kpis;
+  const tiles = [
+    ["Outstanding", cash(k.outstanding), "still owed by clients"],
+    ["Collected", cash(k.collected), "payments received"],
+    ["Paid out", cash(k.paid_out), "to subcontractors"],
+    ["Agent agreed", k.agent_agreed, "requests within your rules"],
+    ["Asked you", k.owner_decided, "requests outside them"],
+    ["Blocked", k.blocked, "requests nobody should agree to"],
+  ];
+  $("#kpis").innerHTML = tiles.map(([l, v, h]) => `<div class="kpi"><div class="l">${l}</div><div class="v">${esc(v)}</div><div class="h">${h}</div></div>`).join("");
+}
+
+function renderRules() {
+  const r = L.rules;
+  const items = [
+    `Up to <b>${r.early_pay_discount_pct}%</b> off for paying the whole balance now`,
+    r.max_discount_pct ? `Up to <b>${r.max_discount_pct}%</b> off with no condition` : `No discount without paying in full now`,
+    `Requests above <b>${r.escalate_discount_up_to_pct}%</b> off are blocked`,
+    r.floor_amount ? `Never below <b>${cash(r.floor_amount)}</b> in total` : `No minimum total set`,
+    `Payment plans of up to <b>${r.max_installments}</b> payments, at least <b>${r.min_first_payment_pct}%</b> up front, at most <b>${r.max_installment_gap_days}</b> days apart`,
+    r.installments_for === "repeat_clients" ? `Plans only for returning clients` : `Plans for any client`,
+    `Due dates moved up to <b>${r.max_extension_days}</b> days; more than <b>${r.escalate_extension_up_to_days}</b> is blocked`,
+  ];
+  $("#rules").innerHTML = `<h2>The agent's rules</h2><ul>${items.map((i) => `<li>${i}</li>`).join("")}</ul>
+    <div class="h">Anything between "agreed" and "blocked" comes to your phone. These rules are checked in code, so nothing a client types can change them.</div>`;
+}
+
+async function undo(pid, btn) {
+  btn.disabled = true; btn.textContent = "…";
+  await fetch("/api/chat", {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify({text: "undo #" + pid})});
+  refresh();
+}
+
+async function refresh() {
+  try {
+    const r = await fetch("/api/ledger");
+    L = await r.json();
+    $("#title").textContent = `${L.business}: money ledger`;
+    document.title = `${L.business} ledger`;
+    $("#now").textContent = L.now + (L.mode === "fake" ? " · simulated PayPal sandbox" : L.mode === "offline" ? " · PayPal not connected" : " · PayPal sandbox");
+    renderKpis(); renderRules();
+    api.setGridOption("rowData", L.rows);
+    $("#live").textContent = "Live · updated " + new Date().toLocaleTimeString([], {hour: "2-digit", minute: "2-digit", second: "2-digit"});
+  } catch (e) {
+    $("#live").textContent = "Can't reach the server";
+  }
+}
+
+$("#grid").addEventListener("click", (e) => {
+  const b = e.target.closest("button[data-undo]");
+  if (b) undo(b.dataset.undo, b);
+});
+$("#q").addEventListener("input", (e) => api.setGridOption("quickFilterText", e.target.value));
+$("#kinds").addEventListener("click", (e) => {
+  const b = e.target.closest("button"); if (!b) return;
+  kind = b.dataset.k;
+  $("#kinds").querySelectorAll("button").forEach((x) => x.setAttribute("aria-pressed", String(x === b)));
+  api.onFilterChanged();
+});
+
+makeGrid();
+refresh();
+setInterval(() => { if (document.visibilityState === "visible") refresh(); }, 4000);
+</script>
+</body>
+</html>

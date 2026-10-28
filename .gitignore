@@ -1,0 +1,8 @@
+google_client.json
+invisible.db
+invisible.db-*
+__pycache__/
+.env
+.env.*
+!.env.example
+.DS_Store

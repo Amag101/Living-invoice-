@@ -1,0 +1,364 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Invisible Software</title>
+<link rel="stylesheet" href="/style.css">
+<style>
+  .layout {
+    display: grid; grid-template-columns: minmax(0, 1fr) 400px; gap: 24px;
+    padding: 24px; max-width: 1280px; margin: 0 auto; align-items: start;
+  }
+  .section-label { font-size: 12px; font-weight: 600; color: var(--ink-3); text-transform: uppercase; letter-spacing: .05em; margin: 0 0 8px; }
+  .toast { background: var(--bad-soft); color: var(--bad); border-radius: var(--radius); padding: 10px 14px; margin-bottom: 12px; }
+  .clock { display: flex; align-items: center; gap: 16px; padding: 14px 16px; margin-bottom: 16px; flex-wrap: wrap; }
+  .clock .time { font-size: 20px; font-weight: 650; font-variant-numeric: tabular-nums; flex: 1; min-width: 180px; }
+  .clock .time small { display: block; font-size: 12px; font-weight: 500; color: var(--ink-3); }
+  .clock .btns { display: flex; gap: 8px; }
+  .tabs { display: flex; gap: 4px; padding: 8px 8px 0; border-bottom: 1px solid var(--line); overflow-x: auto; }
+  .tabs button {
+    border: none; background: none; border-radius: 6px 6px 0 0; padding: 8px 12px; color: var(--ink-2);
+    border-bottom: 2px solid transparent; margin-bottom: -1px; white-space: nowrap;
+  }
+  .tabs button[aria-selected="true"] { color: var(--ink); border-bottom-color: var(--accent); font-weight: 600; }
+  .tabs .count { font-size: 11px; background: var(--surface-2); border: 1px solid var(--line); border-radius: 999px; padding: 0 6px; margin-left: 4px; }
+  .panel { overflow-x: auto; }
+  .panel[hidden] { display: none; }
+  .who { font-weight: 550; }
+  .sub { color: var(--ink-3); font-size: 12.5px; }
+  .actions { display: flex; gap: 6px; justify-content: flex-end; }
+  .msg-item { padding: 12px 16px; border-bottom: 1px solid var(--line); }
+  .msg-item:last-child { border-bottom: none; }
+  .msg-head { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-bottom: 4px; }
+  .msg-body { white-space: pre-wrap; color: var(--ink-2); font-size: 13px; }
+  .empty { padding: 28px 16px; text-align: center; color: var(--ink-3); }
+  form.new { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; padding: 16px; }
+  form.new label { display: grid; gap: 4px; font-size: 12.5px; color: var(--ink-2); }
+  form.new .full { grid-column: 1 / -1; }
+  .note { padding: 12px 16px; font-size: 12.5px; color: var(--ink-3); border-top: 1px solid var(--line); }
+
+  /* phone */
+  .phone {
+    position: sticky; top: 16px; border-radius: 32px; border: 10px solid #1d1c1a; background: var(--chat-bg);
+    height: calc(100vh - 120px); min-height: 560px; max-height: 820px; display: flex; flex-direction: column;
+    overflow: hidden; box-shadow: 0 1px 2px rgba(0,0,0,.08);
+  }
+  .phone-head { background: var(--accent); color: #fff; padding: 12px 14px; display: flex; align-items: center; gap: 10px; }
+  .avatar { width: 34px; height: 34px; border-radius: 50%; background: rgba(255,255,255,.18); display: grid; place-items: center; }
+  .avatar span { width: 16px; height: 16px; border-radius: 50%; border: 2px dashed #fff; }
+  .phone-head .name { font-weight: 600; }
+  .phone-head .status { font-size: 12px; opacity: .85; }
+  .badge { margin-left: auto; background: #fff; color: var(--accent); font-size: 12px; font-weight: 700; border-radius: 999px; padding: 1px 8px; }
+  .thread { flex: 1; overflow-y: auto; padding: 12px; display: flex; flex-direction: column; gap: 6px; }
+  .bubble {
+    max-width: 86%; padding: 7px 10px 5px; border-radius: 10px; font-size: 13.5px; line-height: 1.42;
+    box-shadow: 0 1px 1px rgba(0,0,0,.08); overflow-wrap: anywhere;
+  }
+  .bubble.bot { background: var(--bubble-bot); align-self: flex-start; border-top-left-radius: 2px; }
+  .bubble.owner { background: var(--bubble-me); align-self: flex-end; border-top-right-radius: 2px; }
+  .bubble .t { font-size: 10.5px; color: var(--ink-3); text-align: right; margin-top: 2px; }
+  .bubble blockquote {
+    margin: 6px 0; padding: 4px 8px; border-left: 3px solid var(--accent); background: var(--surface-2);
+    color: var(--ink-2); border-radius: 0 6px 6px 0; font-size: 12.5px; white-space: pre-wrap;
+  }
+  .bubble em { color: var(--ink-3); font-size: 12px; }
+  .bubble .btnrow { display: flex; gap: 6px; margin-top: 8px; }
+  .bubble .btnrow button { flex: 1; color: var(--accent); font-weight: 600; background: var(--surface-2); border-color: var(--line); }
+  .bubble .done { margin-top: 6px; }
+  .chips { display: flex; gap: 6px; padding: 8px 10px 0; overflow-x: auto; }
+  .chips button { border-radius: 999px; font-size: 12px; padding: 3px 10px; white-space: nowrap; }
+  .composer { display: flex; gap: 8px; padding: 8px 10px 10px; }
+  .composer input { border-radius: 999px; }
+  .composer button { border-radius: 999px; }
+
+  @media (max-width: 900px) {
+    .layout { grid-template-columns: minmax(0, 1fr); padding: 16px; }
+    .layout > section { min-width: 0; }
+    .phone { position: static; height: 640px; }
+  }
+  @media (max-width: 560px) {
+    form.new { grid-template-columns: 1fr; }
+    .clock .btns { width: 100%; }
+    .clock .btns button { flex: 1; padding: 6px 4px; }
+  }
+</style>
+</head>
+<body>
+<header class="topbar">
+  <div class="brand"><span class="mark" aria-hidden="true"></span>Invisible <span class="tag">prototype</span></div>
+  <div class="hint">Left: the business's own tools, simulated. Right: the only screen the owner ever sees.</div>
+  <nav>
+    <a href="/ledger"><button>Money ledger</button></a>
+    <a href="/audit"><button>Audit log and connections</button></a>
+    <button id="reset">Reset demo</button>
+  </nav>
+</header>
+
+<main class="layout">
+  <section aria-label="Business tools">
+    <p class="section-label">Kora Studio's tools <span class="faint" id="toolsnote">(sandbox)</span></p>
+    <div class="toast" id="toast" hidden></div>
+    <div class="card clock">
+      <div class="time"><small id="clocklabel">Simulated time</small><span id="now">…</span></div>
+      <div class="btns" id="realbtns" hidden>
+        <button id="syncnow">Sync Google now</button>
+      </div>
+      <div class="btns" id="simbtns">
+        <button data-advance="1">+1 hour</button>
+        <button data-advance="24">+1 day</button>
+        <button data-advance="168">+1 week</button>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="tabs" role="tablist">
+        <button role="tab" data-tab="calendar" aria-selected="true">Calendar</button>
+        <button role="tab" data-tab="accounting" aria-selected="false">Accounting</button>
+        <button role="tab" data-tab="outbox" aria-selected="false">Sent to clients <span class="count" id="outcount">0</span></button>
+        <button role="tab" data-tab="new" aria-selected="false">New appointment</button>
+      </div>
+      <div class="panel" id="tab-calendar"></div>
+      <div class="panel" id="tab-accounting" hidden></div>
+      <div class="panel" id="tab-outbox" hidden></div>
+      <div class="panel" id="tab-new" hidden>
+        <form class="new" id="newform">
+          <label class="full">Client<select name="contact_id" id="contactsel"></select></label>
+          <label class="full">What<input name="title" value="Consultation" required></label>
+          <label>When<input name="start" type="datetime-local" id="startinput" required></label>
+          <label>Amount<input name="amount" type="number" min="0" step="1" value="300"></label>
+          <div class="full"><button class="primary" type="submit">Add to calendar</button></div>
+        </form>
+        <div class="note" id="newnote"></div>
+      </div>
+    </div>
+  </section>
+
+  <section aria-label="Owner's phone">
+    <div class="phone">
+      <div class="phone-head">
+        <div class="avatar"><span></span></div>
+        <div><div class="name">Invisible</div><div class="status" id="pstatus">watching 4 tools</div></div>
+        <span class="badge" id="pending" hidden></span>
+      </div>
+      <div class="thread" id="thread" aria-live="polite"></div>
+      <div class="chips">
+        <button data-say="yes">yes</button>
+        <button data-say="no">no</button>
+        <button data-say="undo">undo</button>
+        <button data-say="summary">summary</button>
+        <button data-say="what are you doing">what are you doing</button>
+        <button data-say="help">help</button>
+      </div>
+      <form class="composer" id="composer">
+        <input id="msg" autocomplete="off" placeholder="Message Invisible" aria-label="Message Invisible">
+        <button class="primary" type="submit">Send</button>
+      </form>
+    </div>
+  </section>
+</main>
+
+<script>
+const $ = (s) => document.querySelector(s);
+let last = "";
+let S = null;
+
+const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+const money = (n) => S.currency + Math.round(n).toLocaleString("en-US");
+const when = (iso) => new Date(iso).toLocaleString("en-GB", { weekday: "short", day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit" });
+const day = (iso) => new Date(iso).toLocaleDateString("en-GB", { weekday: "short", day: "2-digit", month: "short" });
+const hm = (iso) => iso.slice(11, 16);
+
+function md(text) {
+  const lines = esc(text).split("\n");
+  let out = "", quote = [];
+  const flush = () => { if (quote.length) { out += "<blockquote>" + quote.join("\n") + "</blockquote>"; quote = []; } };
+  for (const line of lines) {
+    if (line.startsWith("&gt; ")) { quote.push(line.slice(5)); continue; }
+    flush();
+    out += line + "<br>";
+  }
+  flush();
+  return out.replace(/(<br>)+$/, "")
+    .replace(/\*\*(.+?)\*\*/g, "<strong>$1</strong>")
+    .replace(/~~(.+?)~~/g, "<s>$1</s>")
+    .replace(/(^|[\s(>])_(.+?)_(?=$|[\s.,)<])/g, "$1<em>$2</em>");
+}
+
+async function api(path, body) {
+  const r = await fetch(path, body === undefined ? {} : {
+    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body),
+  });
+  const data = await r.json();
+  if (!r.ok) {
+    const t = $("#toast");
+    t.textContent = data.error || "Something went wrong";
+    t.hidden = false;
+    clearTimeout(api.timer);
+    api.timer = setTimeout(() => (t.hidden = true), 6000);
+    return fetch("/api/state").then((x) => x.json());
+  }
+  return data;
+}
+
+function render(state) {
+  const json = JSON.stringify(state);
+  if (json === last) return;
+  last = json;
+  S = state;
+  $("#now").textContent = state.now_nice;
+  const real = state.clock === "real", g = state.google;
+  $("#clocklabel").textContent = real ? "Real time" : "Simulated time";
+  $("#realbtns").hidden = !real;
+  $("#simbtns").hidden = real;
+  $("#toolsnote").textContent = g.connected ? `(Gmail and Google Calendar: ${g.account}${g.live_email ? "" : ", test mode"})` : "(sandbox)";
+  $("#pstatus").textContent = g.connected ? "watching Gmail, Google Calendar and 2 more" : "watching 4 tools";
+  $("#newform").hidden = !!g.connected;
+  $("#newnote").textContent = g.connected ? "Google Calendar is connected, so add appointments there. Invisible picks them up on its next sync."
+    : "Adding an appointment within 24 hours triggers the reminder automation straight away.";
+  renderCalendar(); renderAccounting(); renderOutbox(); renderChat();
+  const sel = $("#contactsel");
+  if (!sel.options.length) {
+    sel.innerHTML = state.contacts.map((c) => `<option value="${c.id}">${esc(c.name)}${c.company ? " · " + esc(c.company) : ""}</option>`).join("");
+  }
+}
+
+function statusPill(s) {
+  const map = { scheduled: "", completed: "good", cancelled: "bad", paid: "good", sent: "", void: "bad", unclaimed: "", success: "good", succeeded: "good", returned: "bad", failed: "bad" };
+  return `<span class="pill ${map[s] || ""}">${esc(s)}</span>`;
+}
+
+function renderCalendar() {
+  const rows = S.events.map((e) => `
+    <tr>
+      <td><div>${esc(when(e.start))}</div></td>
+      <td><div class="who">${esc(e.title)}${e.source === "google" ? ' <span class="pill">Google</span>' : ""}</div><div class="sub">${e.name ? esc(e.name) : "no client guest"}${e.company ? " · " + esc(e.company) : ""}${e.sub_name && e.sub_share ? ` · ${esc(e.sub_name)} gets ${money(e.sub_share)}` : ""}</div></td>
+      <td class="num">${e.amount ? money(e.amount) : "—"}</td>
+      <td>${statusPill(e.status)}</td>
+      <td><div class="actions">${e.status === "scheduled" ? `
+        <button class="small primary" data-act="event/complete" data-id="${e.id}">Mark done</button>
+        ${e.source === "google" ? "" : `<button class="small" data-act="event/cancel" data-id="${e.id}">Cancel</button>`}` : ""}</div></td>
+    </tr>`).join("");
+  $("#tab-calendar").innerHTML = `<table><thead><tr><th>When</th><th>Appointment</th><th class="num">Amount</th><th>Status</th><th></th></tr></thead><tbody>${rows}</tbody></table>`;
+}
+
+function renderAccounting() {
+  const rows = S.invoices.map((i) => {
+    let st = statusPill(i.status);
+    if (i.status === "sent" && i.days_overdue > 0) st = `<span class="pill warn">${i.days_overdue} days overdue</span>`;
+    else if (i.status === "sent") st = `<span class="pill">due ${esc(day(i.due_at))}</span>`;
+    return `<tr>
+      <td><div class="who">${esc(i.number)}</div><div class="sub">issued ${esc(day(i.issued_at))}</div></td>
+      <td><div>${esc(i.name)}</div><div class="sub">${esc(i.company || "")}</div></td>
+      <td class="num">${money(i.amount)}</td>
+      <td>${st}</td>
+      <td><div class="actions">${i.token ? `<a class="small" href="/i/${encodeURIComponent(i.token)}" target="_blank" rel="noopener">Client view</a>` : ""}
+        ${i.status === "sent" ? `<button class="small" data-act="invoice/paid" data-id="${i.id}">Record payment</button>` : ""}</div></td>
+    </tr>`;
+  }).join("");
+  const payouts = (S.payouts || []).map((p) => `<tr>
+      <td><div class="who">${esc(p.name)}</div><div class="sub">${esc(p.email)}</div></td>
+      <td>${esc(p.number)}</td>
+      <td class="num">${money(p.amount)}</td>
+      <td>${statusPill(p.status)}</td><td></td></tr>`).join("");
+  $("#tab-accounting").innerHTML = `<table><thead><tr><th>Invoice</th><th>Client</th><th class="num">Amount</th><th>Status</th><th></th></tr></thead><tbody>${rows}</tbody></table>
+    ${payouts ? `<h3 class="sub" style="margin:18px 0 6px">Payouts to subcontractors</h3>
+    <table><thead><tr><th>Subcontractor</th><th>For</th><th class="num">Amount</th><th>Status</th><th></th></tr></thead><tbody>${payouts}</tbody></table>` : ""}`;
+}
+
+function renderOutbox() {
+  $("#outcount").textContent = S.outbox.length;
+  if (!S.outbox.length) {
+    $("#tab-outbox").innerHTML = `<div class="empty">Nothing sent to clients yet. Emails and WhatsApp messages Invisible sends appear here.</div>`;
+    return;
+  }
+  $("#tab-outbox").innerHTML = S.outbox.map((o) => `
+    <div class="msg-item">
+      <div class="msg-head">
+        <span class="pill ${o.channel === "whatsapp" ? "good" : ""}">${o.channel === "whatsapp" ? "WhatsApp" : "Email"}</span>
+        <span class="who">${esc(o.name)}</span><span class="sub">${esc(o.to_addr)}</span>
+        <span class="sub" style="margin-left:auto">${esc(when(o.sent_at))}</span>
+      </div>
+      ${o.subject ? `<div class="who" style="font-size:13px">${esc(o.subject)}</div>` : ""}
+      ${o.note ? `<div class="sub" style="margin-bottom:4px">${esc(o.note)}</div>` : ""}
+      <div class="msg-body">${esc(o.body)}</div>
+    </div>`).join("");
+}
+
+const STATUS_WORD = { executed: ["Done", "good"], skipped: ["Skipped", ""], cancelled: ["Withdrawn", ""], undone: ["Undone", "warn"], failed: ["Failed", "bad"] };
+
+function renderChat() {
+  const th = $("#thread");
+  const atBottom = th.scrollHeight - th.scrollTop - th.clientHeight < 60;
+  th.innerHTML = S.chat.map((m) => {
+    let extra = "";
+    if (m.buttons && m.buttons.length) {
+      const live = m.buttons.filter((b) => (b.label === "Undo" ? m.pstatus === "executed" : m.pstatus === "pending"));
+      if (live.length) {
+        extra = `<div class="btnrow">${live.map((b) => `<button data-say="${esc(b.send)}">${esc(b.label)}</button>`).join("")}</div>`;
+      } else if (STATUS_WORD[m.pstatus] && m.buttons[0].label !== "Undo") {
+        const [w, cls] = STATUS_WORD[m.pstatus];
+        extra = `<div class="done"><span class="pill ${cls}">${w}</span></div>`;
+      }
+    }
+    return `<div class="bubble ${m.sender === "owner" ? "owner" : "bot"}">${md(m.body)}${extra}<div class="t">${hm(m.at)}</div></div>`;
+  }).join("");
+  if (atBottom || th.dataset.init !== "1") { th.scrollTop = th.scrollHeight; th.dataset.init = "1"; }
+  const b = $("#pending");
+  b.hidden = !S.pending;
+  b.textContent = S.pending + " waiting";
+}
+
+async function say(text) {
+  render(await api("/api/chat", { text }));
+  const th = $("#thread"); th.scrollTop = th.scrollHeight;
+}
+
+document.addEventListener("click", async (e) => {
+  const t = e.target.closest("button");
+  if (!t) return;
+  if (t.dataset.tab) {
+    document.querySelectorAll(".tabs button").forEach((b) => b.setAttribute("aria-selected", b === t));
+    document.querySelectorAll(".panel").forEach((p) => (p.hidden = p.id !== "tab-" + t.dataset.tab));
+  } else if (t.id === "syncnow") {
+    t.disabled = true;
+    render(await api("/api/connections/google/sync", {}));
+    t.disabled = false;
+  } else if (t.dataset.advance) {
+    render(await api("/api/sandbox/clock/advance", { hours: +t.dataset.advance }));
+  } else if (t.dataset.act) {
+    render(await api("/api/sandbox/" + t.dataset.act, { id: +t.dataset.id }));
+  } else if (t.dataset.say) {
+    say(t.dataset.say);
+  } else if (t.id === "reset") {
+    if (confirm("Reset the demo to its starting data?")) { last = ""; $("#thread").dataset.init = ""; render(await api("/api/reset", {})); }
+  }
+});
+
+$("#composer").addEventListener("submit", (e) => {
+  e.preventDefault();
+  const v = $("#msg").value.trim();
+  if (!v) return;
+  $("#msg").value = "";
+  say(v);
+});
+
+$("#newform").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const f = new FormData(e.target);
+  render(await api("/api/sandbox/event/create", Object.fromEntries(f)));
+  document.querySelector('[data-tab="calendar"]').click();
+});
+
+async function poll() {
+  try { render(await api("/api/state")); } catch (err) { /* server restarting */ }
+  if (S && !$("#startinput").value) {
+    const d = new Date(S.now); d.setHours(d.getHours() + 5);
+    $("#startinput").value = new Date(d.getTime() - d.getTimezoneOffset() * 60000).toISOString().slice(0, 16);
+  }
+}
+poll();
+setInterval(poll, 2000);
+</script>
+</body>
+</html>
