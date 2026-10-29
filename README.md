@@ -19,7 +19,9 @@ Built for the [PayPal AI Hackathon](https://paypalaihackathon.devpost.com/) on t
 | Subcontractor payouts: a paid-in-full invoice proposes the subcontractor's share with PayPal Payouts; first payout to anyone asks; undo cancels while unclaimed | `server.py` (`PayoutOnPaid`, `PayPalPayouts`) | done |
 | Money ledger at `/ledger`: AG Grid of every invoice, request, decision, payment and payout, live totals, filters, undo | `app/ledger.html`, `server.py` (`ledger_state`) | done |
 | Owner sets the agent's rules in plain English on the phone (“allow up to 4 payments”, “3% off for paying today”), confirms a before/after preview | `server.py` (`propose_mandate`) | done |
-| Owner Assistant on the PayPal Agent Toolkit, the agent earning wider rules | — | planned |
+| Send an invoice directly from the New invoice tab (new or existing client, optional subcontractor share) | `app/index.html`, `server.py` (`new_invoice`) | done |
+| The agent earns wider rules: three approvals of the same kind of request lead to an offer to handle those itself; an undo narrows the rule back | `server.py` (`maybe_grow`, `maybe_shrink`) | done |
+| Owner Assistant on the PayPal Agent Toolkit | — | planned |
 
 ### Run against the PayPal sandbox
 
@@ -171,6 +173,14 @@ python3 tests/test_policy.py
 
 ```bash
 python3 tests/test_living.py
+```
+
+```bash
+python3 tests/test_new_invoice.py
+```
+
+```bash
+python3 tests/test_growth.py
 ```
 
 ```bash

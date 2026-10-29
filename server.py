@@ -1587,7 +1587,12 @@ def undo(pid, actor="owner"):
     if kept:
         msg.append("Couldn't reverse: " + "; ".join(kept) + ".")
     ex("UPDATE automations SET streak=0 WHERE id=?", (auto["id"],))
-    if auto["trust"] in ("auto_notice", "silent"):
+    shrunk = maybe_shrink(json.loads(p["draft"] or "{}").get("offer_id"))
+    if shrunk:
+        msg.append(shrunk)
+    elif auto["template"] == "invoice_negotiation":
+        pass  # the agent's rules are its trust level; one undo inside them doesn't change them
+    elif auto["trust"] in ("auto_notice", "silent"):
         ex("UPDATE automations SET trust='suggest' WHERE id=?", (auto["id"],))
         log("trust_changed", "%s: back to asking first after an undo" % TEMPLATES[auto["template"]].name,
             None, auto["id"])
@@ -1798,6 +1803,7 @@ def approve(pid):
         reply.append("%d more waiting for you above." % left)
     post("bot", "\n".join(reply), p["id"],
          [{"label": "Undo", "send": "undo #%d" % p["id"]}])
+    maybe_grow(json.loads(p["draft"] or "{}").get("offer_id"))
     return None
 
 
@@ -2501,11 +2507,126 @@ def propose_mandate(text):
 
 
 def apply_mandate(p):
-    rules = json.loads(p["draft"])["rules"]
+    draft = json.loads(p["draft"])
+    rules = draft["rules"]
     set_setting("mandate", json.dumps(rules))
+    if draft.get("growth"):
+        grown = json.loads(get_setting("mandate_growth") or "[]")
+        grown.append(dict(draft["growth"], at=iso(now()), active=True, proposal_id=p["id"]))
+        set_setting("mandate_growth", json.dumps(grown))
     ex("UPDATE proposals SET status='executed', decided_at=? WHERE id=?", (iso(now()), p["id"]))
     log("rules_changed", "Invoice agent rules updated", p["id"], actor="owner", data={"rules": rules})
     return "Saved. The invoice agent now follows these rules:\n" + "\n".join("- " + l for l in rules_lines(mandate()))
+
+
+# ---- The agent earns wider rules -------------------------------------------
+# Three approvals in a row of the same kind of request: offer to let the agent agree
+# to those itself, at the most conservative value the owner approved. An undo of
+# something the agent agreed to under a widened rule narrows that rule back.
+
+GROWTH_STREAK = 3
+GROWTH_LABELS = {"discount": "a discount without paying in full", "discount:now": "a bigger discount for paying now",
+                 "payment_plan": "payment plans", "extension": "more time to pay"}
+
+
+def growth_key(o):
+    offer = json.loads(o["offer"])
+    return o["kind"] + (":now" if o["kind"] == "discount" and offer.get("condition") == "pay_in_full_now" else "")
+
+
+def approval_streak(key):
+    """The owner's approvals of this kind of escalated request since they last declined or countered one,
+    and since the agent last asked about this kind."""
+    asked = json.loads(get_setting("growth_asked") or "{}").get(key, 0)
+    streak = []
+    for o in q("SELECT * FROM offers WHERE source='agent' AND decision='ESCALATE' AND id>? "
+               "AND status IN ('approved','declined','countered') ORDER BY decided_at, id", (asked,)):
+        if growth_key(o) == key:
+            streak = streak + [o] if o["status"] == "approved" else []
+    return streak
+
+
+def widened(m, key, offers):
+    m = dict(m)
+    asks = [json.loads(o["offer"]) for o in offers]
+    terms = [json.loads(o["terms"]) for o in offers]
+    if key == "discount":
+        m["max_discount_pct"] = max(m["max_discount_pct"], min(float(a["pct"]) for a in asks))
+    elif key == "discount:now":
+        m["early_pay_discount_pct"] = max(m["early_pay_discount_pct"], min(float(a["pct"]) for a in asks))
+    elif key == "payment_plan":
+        m["max_installments"] = max(m["max_installments"], min(t["installments"] for t in terms))
+        firsts = [100.0 * t["schedule"][0]["amount"] / sum(x["amount"] for x in t["schedule"]) for t in terms]
+        m["min_first_payment_pct"] = min(m["min_first_payment_pct"], int(min(firsts)))
+        m["max_installment_gap_days"] = max(m["max_installment_gap_days"], min(t["gap_days"] for t in terms))
+        if any("repeat clients" in r for o in offers for r in json.loads(o["reasons"])):
+            m["installments_for"] = "anyone"
+    elif key == "extension":
+        m["max_extension_days"] = max(m["max_extension_days"], min(t["days"] for t in terms))
+    return clean_mandate(m)
+
+
+def maybe_grow(offer_id):
+    offer = q1("SELECT * FROM offers WHERE id=?", (offer_id,)) if offer_id else None
+    if not offer or offer["source"] != "agent" or offer["decision"] != "ESCALATE" or offer["status"] != "approved":
+        return
+    key = growth_key(offer)
+    streak = approval_streak(key)
+    if len(streak) < GROWTH_STREAK:
+        return
+    asked = json.loads(get_setting("growth_asked") or "{}")
+    asked[key] = max(o["id"] for o in streak)  # count afresh from here, whatever the answer
+    set_setting("growth_asked", json.dumps(asked))
+    current = mandate()
+    new = widened(current, key, streak[-GROWTH_STREAK:])
+    changed = {k: (current[k], new[k]) for k in new if new[k] != current.get(k)}
+    diff = [(b, a) for b, a in zip(rules_lines(current), rules_lines(new)) if b != a]
+    if not diff:
+        return
+    for p in q("SELECT * FROM proposals WHERE status='pending' AND kind='mandate'"):
+        ex("UPDATE proposals SET status='skipped', decided_at=? WHERE id=?", (iso(now()), p["id"]))
+    summary = "Let the invoice agent agree to %s itself" % GROWTH_LABELS[key]
+    asks = "; ".join(describe_terms(o["kind"], json.loads(o["terms"])).split(", so")[0] for o in streak[-GROWTH_STREAK:])
+    pid = ex("INSERT INTO proposals(kind,summary,explanation,draft,reasons,status,created_at) "
+             "VALUES('mandate',?,?,?,?,?,?)",
+             (summary, "You approved the last %d requests for %s." % (GROWTH_STREAK, GROWTH_LABELS[key]),
+              json.dumps({"rules": new, "growth": {"key": key, "before": {k: v[0] for k, v in changed.items()},
+                                                   "after": {k: v[1] for k, v in changed.items()}}}),
+              "[]", "pending", iso(now())))
+    log("proposed", summary, pid, data={"from": current, "to": new, "approved": [o["id"] for o in streak]})
+    post("bot", "You've approved the last %d requests for **%s** (%s). Shall I agree to requests like these myself "
+                "from now on?\n%s\nIf you undo one I agree to, I'll go back to asking." % (
+                    GROWTH_STREAK, GROWTH_LABELS[key], asks, "\n".join("- ~~%s~~ → **%s**" % (b, a) for b, a in diff)),
+         pid, [{"label": "Yes", "send": "approve #%d" % pid}, {"label": "No", "send": "skip #%d" % pid}])
+
+
+def maybe_shrink(offer_id):
+    """The owner undid something the agent agreed to by itself under a rule it had earned: narrow it back."""
+    offer = q1("SELECT * FROM offers WHERE id=?", (offer_id,)) if offer_id else None
+    if not offer or offer["source"] != "agent" or offer["decision"] != "ALLOW":
+        return None
+    key = growth_key(offer)
+    grown = json.loads(get_setting("mandate_growth") or "[]")
+    live = [g for g in grown if g["active"] and g["key"] == key and g["at"] <= offer["at"]]
+    if not live:
+        return None
+    g = live[-1]
+    current = mandate()
+    restored = dict(current, **{k: v for k, v in g["before"].items() if current.get(k) == g["after"].get(k)})
+    restored = clean_mandate(restored)
+    diff = [(b, a) for b, a in zip(rules_lines(current), rules_lines(restored)) if b != a]
+    g["active"] = False
+    set_setting("mandate_growth", json.dumps(grown))
+    asked = json.loads(get_setting("growth_asked") or "{}")
+    asked[key] = q1("SELECT MAX(id) m FROM offers")["m"] or 0
+    set_setting("growth_asked", json.dumps(asked))
+    if not diff:
+        return None
+    set_setting("mandate", json.dumps(restored))
+    log("rules_narrowed", "Undo narrowed the rule for %s back" % GROWTH_LABELS[key], actor="owner",
+        data={"from": current, "to": restored, "offer_id": offer["id"]})
+    return "Because you undid that, I've narrowed the rule back, and I'll ask you about %s again:\n%s" % (
+        GROWTH_LABELS[key], "\n".join("- ~~%s~~ → **%s**" % (b, a) for b, a in diff))
 
 
 def invoice_facts(inv):
