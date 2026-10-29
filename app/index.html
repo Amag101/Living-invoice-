@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Invisible Software</title>
+<title>Living Invoice</title>
 <link rel="stylesheet" href="/style.css">
 <style>
   .layout {
@@ -36,6 +36,8 @@
   form.new { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; padding: 16px; }
   form.new label { display: grid; gap: 4px; font-size: 12.5px; color: var(--ink-2); }
   form.new .full { grid-column: 1 / -1; }
+  form.new .row3 { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 12px; }
+  form.new .row3 .span2 { grid-column: span 2; }
   .note { padding: 12px 16px; font-size: 12.5px; color: var(--ink-3); border-top: 1px solid var(--line); }
 
   /* phone */
@@ -79,6 +81,8 @@
   }
   @media (max-width: 560px) {
     form.new { grid-template-columns: 1fr; }
+    form.new .row3 { grid-template-columns: 1fr; }
+    form.new .row3 .span2 { grid-column: auto; }
     .clock .btns { width: 100%; }
     .clock .btns button { flex: 1; padding: 6px 4px; }
   }
@@ -86,7 +90,7 @@
 </head>
 <body>
 <header class="topbar">
-  <div class="brand"><span class="mark" aria-hidden="true"></span>Invisible <span class="tag">prototype</span></div>
+  <div class="brand"><span class="mark" aria-hidden="true"></span>Living Invoice <span class="tag">demo</span></div>
   <div class="hint">Left: the business's own tools, simulated. Right: the only screen the owner ever sees.</div>
   <nav>
     <a href="/ledger"><button>Money ledger</button></a>
@@ -115,12 +119,38 @@
       <div class="tabs" role="tablist">
         <button role="tab" data-tab="calendar" aria-selected="true">Calendar</button>
         <button role="tab" data-tab="accounting" aria-selected="false">Accounting</button>
+        <button role="tab" data-tab="invoice" aria-selected="false">New invoice</button>
         <button role="tab" data-tab="outbox" aria-selected="false">Sent to clients <span class="count" id="outcount">0</span></button>
         <button role="tab" data-tab="new" aria-selected="false">New appointment</button>
       </div>
       <div class="panel" id="tab-calendar"></div>
       <div class="panel" id="tab-accounting" hidden></div>
       <div class="panel" id="tab-outbox" hidden></div>
+      <div class="panel" id="tab-invoice" hidden>
+        <form class="new" id="invform">
+          <label class="full">Client<select name="contact_id" id="invclient"></select></label>
+          <div class="full newclient" hidden>
+            <div class="row3">
+              <label>Name<input name="new_name" placeholder="Ada Lovelace"></label>
+              <label>Company<input name="new_company" placeholder="Optional"></label>
+              <label>Email<input name="new_email" type="email" placeholder="ada@example.com"></label>
+            </div>
+          </div>
+          <label class="full">What it's for<input name="title" placeholder="Logo design, 3 concepts" required maxlength="200"></label>
+          <label>Amount<input name="amount" type="number" min="1" step="0.01" placeholder="500" required></label>
+          <label>Due in (days)<input name="due_days" type="number" min="1" max="120" value="14" required></label>
+          <label>Subcontractor's share<input name="sub_share" type="number" min="0" step="0.01" value="0"></label>
+          <label>Paid to<select name="sub_id" id="invsub"></select></label>
+          <div class="full newsub" hidden>
+            <div class="row3">
+              <label>Name<input name="new_sub_name" placeholder="Femi Adeyemi"></label>
+              <label class="span2">PayPal email<input name="new_sub_email" type="email" placeholder="femi@example.com"></label>
+            </div>
+          </div>
+          <div class="full"><button class="primary" type="submit">Send invoice</button></div>
+        </form>
+        <div class="note">The invoice goes out straight away as a PayPal invoice with its own client page, where the client can ask questions, arrange a plan or pay. The subcontractor's share is paid out with PayPal once the invoice is paid in full. You can undo from the phone.</div>
+      </div>
       <div class="panel" id="tab-new" hidden>
         <form class="new" id="newform">
           <label class="full">Client<select name="contact_id" id="contactsel"></select></label>
@@ -138,7 +168,7 @@
     <div class="phone">
       <div class="phone-head">
         <div class="avatar"><span></span></div>
-        <div><div class="name">Invisible</div><div class="status" id="pstatus">watching 4 tools</div></div>
+        <div><div class="name">Living Invoice</div><div class="status" id="pstatus">watching 5 tools</div></div>
         <span class="badge" id="pending" hidden></span>
       </div>
       <div class="thread" id="thread" aria-live="polite"></div>
@@ -151,7 +181,7 @@
         <button data-say="help">help</button>
       </div>
       <form class="composer" id="composer">
-        <input id="msg" autocomplete="off" placeholder="Message Invisible" aria-label="Message Invisible">
+        <input id="msg" autocomplete="off" placeholder="Message Living Invoice" aria-label="Message Living Invoice">
         <button class="primary" type="submit">Send</button>
       </form>
     </div>
@@ -212,11 +242,12 @@ function render(state) {
   $("#realbtns").hidden = !real;
   $("#simbtns").hidden = real;
   $("#toolsnote").textContent = g.connected ? `(Gmail and Google Calendar: ${g.account}${g.live_email ? "" : ", test mode"})` : "(sandbox)";
-  $("#pstatus").textContent = g.connected ? "watching Gmail, Google Calendar and 2 more" : "watching 4 tools";
+  $("#pstatus").textContent = g.connected ? "watching Gmail, Google Calendar and 2 more" : "watching 5 tools";
   $("#newform").hidden = !!g.connected;
-  $("#newnote").textContent = g.connected ? "Google Calendar is connected, so add appointments there. Invisible picks them up on its next sync."
+  $("#newnote").textContent = g.connected ? "Google Calendar is connected, so add appointments there. Living Invoice picks them up on its next sync."
     : "Adding an appointment within 24 hours triggers the reminder automation straight away.";
   renderCalendar(); renderAccounting(); renderOutbox(); renderChat();
+  fillInvoiceForm(state);
   const sel = $("#contactsel");
   if (!sel.options.length) {
     sel.innerHTML = state.contacts.map((c) => `<option value="${c.id}">${esc(c.name)}${c.company ? " · " + esc(c.company) : ""}</option>`).join("");
@@ -269,7 +300,7 @@ function renderAccounting() {
 function renderOutbox() {
   $("#outcount").textContent = S.outbox.length;
   if (!S.outbox.length) {
-    $("#tab-outbox").innerHTML = `<div class="empty">Nothing sent to clients yet. Emails and WhatsApp messages Invisible sends appear here.</div>`;
+    $("#tab-outbox").innerHTML = `<div class="empty">Nothing sent to clients yet. Emails and WhatsApp messages Living Invoice sends appear here.</div>`;
     return;
   }
   $("#tab-outbox").innerHTML = S.outbox.map((o) => `
@@ -341,6 +372,47 @@ $("#composer").addEventListener("submit", (e) => {
   if (!v) return;
   $("#msg").value = "";
   say(v);
+});
+
+function fillInvoiceForm(state) {
+  const key = state.contacts.length + "/" + state.subcontractors.length;
+  if (fillInvoiceForm.key === key) return;
+  fillInvoiceForm.key = key;
+  const c = $("#invclient"), keepC = c.value, s = $("#invsub"), keepS = s.value;
+  c.innerHTML = state.contacts.map((x) => `<option value="${x.id}">${esc(x.name)}${x.company ? " · " + esc(x.company) : ""}</option>`).join("")
+    + `<option value="new">+ New client…</option>`;
+  s.innerHTML = `<option value="">Nobody</option>` + state.subcontractors.map((x) => `<option value="${x.id}">${esc(x.name)}</option>`).join("")
+    + `<option value="new">+ New subcontractor…</option>`;
+  if (keepC) c.value = keepC;
+  if (keepS) s.value = keepS;
+  toggleInvoiceExtras();
+}
+
+function toggleInvoiceExtras() {
+  const newClient = $("#invclient").value === "new", newSub = $("#invsub").value === "new";
+  document.querySelector("#invform .newclient").hidden = !newClient;
+  document.querySelector("#invform .newsub").hidden = !newSub;
+  $("#invform [name=new_name]").required = newClient;
+  $("#invform [name=new_email]").required = newClient;
+  $("#invform [name=new_sub_name]").required = newSub;
+  $("#invform [name=new_sub_email]").required = newSub;
+}
+$("#invclient").addEventListener("change", toggleInvoiceExtras);
+$("#invsub").addEventListener("change", toggleInvoiceExtras);
+
+$("#invform").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const btn = e.target.querySelector("button[type=submit]");
+  btn.disabled = true;
+  const before = S ? S.invoices.length : 0;
+  const state = await api("/api/sandbox/invoice/new", Object.fromEntries(new FormData(e.target)));
+  btn.disabled = false;
+  render(state);
+  if (state.invoices.length > before) {
+    e.target.reset();
+    fillInvoiceForm.key = null; fillInvoiceForm(state);
+    document.querySelector('[data-tab="accounting"]').click();
+  }
 });
 
 $("#newform").addEventListener("submit", async (e) => {

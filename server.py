@@ -239,8 +239,8 @@ def seed():
            (key, json.dumps(t.default_params), t.default_trust, iso(start)))
 
     post("bot",
-         "Hi, I'm **Invisible**. I'm connected to Kora Studio's email, calendar, WhatsApp "
-         "accounting and PayPal, and I'm running 6 automations in the background.\n\n"
+         "Hi, I'm **Living Invoice**, Kora Studio's billing assistant. I'm connected to your email, calendar, WhatsApp"
+         ", accounting and PayPal, and I'm running 6 automations in the background.\n\n"
          "I'll only message you here when something needs a decision, or to tell you "
          "what I did. Reply **help** any time.\n\n"
          "To see me work: mark a job done in the calendar, or move the clock forward.")
@@ -254,7 +254,7 @@ MIGRATIONS = {
     "invoices": [("token", "TEXT"), ("title", "TEXT"), ("discount_pct", "REAL DEFAULT 0"),
                  ("min_due", "REAL DEFAULT 0"), ("amount_paid", "REAL DEFAULT 0"),
                  ("paypal_id", "TEXT"), ("paypal_status", "TEXT"), ("payer_url", "TEXT"),
-                 ("snapshot", "TEXT"), ("plan", "TEXT")],
+                 ("snapshot", "TEXT"), ("plan", "TEXT"), ("sub_id", "INTEGER"), ("sub_share", "REAL DEFAULT 0")],
 }
 
 
@@ -356,7 +356,8 @@ class Accounting(Connector):
         token = token or secrets.token_urlsafe(16)
         cols = dict(number=number, contact_id=params["contact_id"], event_id=params.get("event_id"),
                     amount=params["amount"], status="sent", issued_at=iso(issued), due_at=iso(due),
-                    title=params.get("title"), token=token, **paypal_fields)
+                    title=params.get("title"), token=token, sub_id=params.get("sub_id"),
+                    sub_share=params.get("sub_share") or 0, **paypal_fields)
         inv_id = ex("INSERT INTO invoices(%s) VALUES(%s)" % (",".join(cols), ",".join("?" * len(cols))),
                     tuple(cols.values()))
         return {"invoice_id": inv_id, "number": number, "due": nice_date(due),
@@ -1114,6 +1115,29 @@ class Template:
         return None
 
 
+def invoice_draft(c, title, amount, due_days, event_id=None, sub_id=None, sub_share=0):
+    """Create-and-email steps for one invoice, used by finished jobs and the New invoice form."""
+    biz = get_setting("business")
+    body = ("Hi %s,\n\nThank you for your business. Please find invoice {s0.number} for %s "
+            "for “%s”. Payment is due by {s0.due}.\n\nYou can pay it, ask about it, or arrange "
+            "a payment plan here: {s0.link}\n\nBest regards,\n%s" % (first_name(c), money(amount), title, biz))
+    return {
+        "contact_id": c["id"], "amount": amount, "event_id": event_id,
+        "preview": body.replace("{s0.number}", "INV-xxxx").replace("{s0.due}", "the due date")
+                       .replace("{s0.link}", "(invoice link)"),
+        "steps": [
+            {"connector": "accounting", "op": "create_invoice", "label": "Create the invoice",
+             "params": {"contact_id": c["id"], "event_id": event_id, "title": title, "amount": amount,
+                        "due_days": due_days, "sub_id": sub_id, "sub_share": sub_share}},
+            {"connector": "email", "op": "send", "label": "Email the invoice to %s" % c["email"],
+             "params": {"contact_id": c["id"], "subject": "Invoice {s0.number} from %s" % biz, "body": body,
+                        "correction_subject": "Please disregard invoice {s0.number}",
+                        "correction_body": "Hi %s,\n\nPlease disregard invoice {s0.number}, which was sent in "
+                                           "error. Apologies for the confusion.\n\n%s" % (first_name(c), biz)}},
+        ],
+    }
+
+
 class InvoiceOnCompletion(Template):
     key, name = "invoice_on_completion", "Invoice finished jobs"
     triggers = ("calendar.event_completed",)
@@ -1133,36 +1157,18 @@ class InvoiceOnCompletion(Template):
         c = q1("SELECT * FROM contacts WHERE id=?", (ev["contact_id"],))
         if not c:  # no client on the event (e.g. a Google event without guests)
             return []
-        biz = get_setting("business")
-        amt = money(ev["amount"])
-        body = ("Hi %s,\n\nThank you for your business. Please find invoice {s0.number} for %s "
-                "for “%s”. Payment is due by {s0.due}.\n\nYou can pay it, ask about it, or arrange "
-                "a payment plan here: {s0.link}\n\nBest regards,\n%s"
-                % (first_name(c), amt, ev["title"], biz))
-        return [{
-            "summary": "Invoice %s %s for “%s”" % (who(c), amt, ev["title"]),
+        draft = invoice_draft(c, ev["title"], ev["amount"], p["due_days"], ev["id"], ev["sub_id"], ev["sub_share"])
+        draft.update({
+            "summary": "Invoice %s %s for “%s”" % (who(c), money(ev["amount"]), ev["title"]),
             "explanation": "“%s” was marked done in your calendar, and it isn't invoiced yet. "
                            "Terms: %d days." % (ev["title"], p["due_days"]),
             "dedupe": "inv:%d" % ev["id"],
-            "contact_id": c["id"], "amount": ev["amount"], "event_id": ev["id"],
-            "preview": body.replace("{s0.number}", "INV-xxxx").replace("{s0.due}", "the due date")
-                           .replace("{s0.link}", "(invoice link)"),
-            "steps": [
-                {"connector": "accounting", "op": "create_invoice",
-                 "label": "Create the invoice",
-                 "params": {"contact_id": c["id"], "event_id": ev["id"], "title": ev["title"],
-                            "amount": ev["amount"], "due_days": p["due_days"]}},
-                {"connector": "email", "op": "send", "label": "Email the invoice to %s" % c["email"],
-                 "params": {"contact_id": c["id"], "subject": "Invoice {s0.number} from %s" % biz,
-                            "body": body,
-                            "correction_subject": "Please disregard invoice {s0.number}",
-                            "correction_body": "Hi %s,\n\nPlease disregard invoice {s0.number}, which "
-                                               "was sent in error. Apologies for the confusion.\n\n%s"
-                                               % (first_name(c), biz)}},
-            ],
-        }]
+        })
+        return [draft]
 
     def precheck(self, draft):
+        if draft.get("manual"):  # sent from the New invoice form: no calendar job to re-check
+            return None
         ev = q1("SELECT * FROM cal_events WHERE id=?", (draft["event_id"],))
         if not ev or ev["status"] != "completed":
             return "the job is no longer marked done"
@@ -1327,12 +1333,15 @@ class PayoutOnPaid(Template):
     def evaluate(self, auto, p, event):
         inv = q1("SELECT * FROM invoices WHERE id=?", (event["invoice_id"],))
         ev = q1("SELECT * FROM cal_events WHERE id=?", (inv["event_id"],)) if inv and inv["event_id"] else None
-        if not inv or inv["status"] != "paid" or not ev or not ev["sub_id"] or not ev["sub_share"]:
+        sub_id = (inv or {}).get("sub_id") or (ev or {}).get("sub_id")
+        share = (inv or {}).get("sub_share") or (ev or {}).get("sub_share")
+        if not inv or inv["status"] != "paid" or not sub_id or not share:
             return []
-        sub = q1("SELECT * FROM subcontractors WHERE id=?", (ev["sub_id"],))
-        amount = round(min(ev["sub_share"], invoice_total(inv)), 2)
+        title = inv["title"] or (ev or {}).get("title") or "Services"
+        sub = q1("SELECT * FROM subcontractors WHERE id=?", (sub_id,))
+        amount = round(min(share, invoice_total(inv)), 2)
         return [{
-            "summary": "Pay %s %s for “%s”" % (sub["name"], money(amount), ev["title"]),
+            "summary": "Pay %s %s for “%s”" % (sub["name"], money(amount), title),
             "explanation": "%s is paid in full, and %s's share of this job is %s."
                            % (inv["number"], first_name(sub), money(amount)),
             "dedupe": "payout:%d" % inv["id"], "invoice_id": inv["id"], "sub_id": sub["id"],
@@ -1340,7 +1349,7 @@ class PayoutOnPaid(Template):
                        "label": "Send %s to %s (%s) with PayPal Payouts" % (money(amount), sub["name"], sub["email"]),
                        "params": {"invoice_id": inv["id"], "sub_id": sub["id"], "amount": amount,
                                   "note": "Your share of “%s” for %s (%s). Thank you!"
-                                          % (ev["title"], get_setting("business"), inv["number"])}}],
+                                          % (title, get_setting("business"), inv["number"])}}],
         }]
 
     def precheck(self, draft):
@@ -2015,6 +2024,73 @@ def owner_message(text):
 # changes happen in Google Calendar, QuickBooks, etc., and reach us as webhooks.
 # --------------------------------------------------------------------------
 
+EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
+
+
+def new_invoice(body):
+    """The owner bills someone directly. Sent at once (the owner asked for it), with an undo."""
+    title = (body.get("title") or "").strip()[:200]
+    if not title:
+        raise ValueError("Say what the invoice is for")
+    try:
+        amount = round(float(body.get("amount") or 0), 2)
+        due_days = int(body.get("due_days") or 14)
+        share = round(float(body.get("sub_share") or 0), 2)
+    except (TypeError, ValueError):
+        raise ValueError("Amounts and days must be numbers")
+    if not 0 < amount <= 1_000_000:
+        raise ValueError("The amount must be more than zero")
+    if not 1 <= due_days <= 120:
+        raise ValueError("Due in must be between 1 and 120 days")
+
+    if body.get("contact_id") == "new":
+        name, email = (body.get("new_name") or "").strip()[:120], (body.get("new_email") or "").strip()[:200]
+        if not name or not EMAIL_RE.match(email):
+            raise ValueError("A new client needs a name and a valid email")
+        c = q1("SELECT * FROM contacts WHERE lower(email)=lower(?)", (email,))
+        if not c:
+            cid = ex("INSERT INTO contacts(name,company,email,phone,contacted) VALUES(?,?,?,?,0)",
+                     (name, (body.get("new_company") or "").strip()[:120], email, ""))
+            c = q1("SELECT * FROM contacts WHERE id=?", (cid,))
+    else:
+        c = q1("SELECT * FROM contacts WHERE id=?", (int(body.get("contact_id") or 0),))
+        if not c:
+            raise ValueError("Pick a client")
+
+    sub_id = None
+    if share:
+        if share >= amount:
+            raise ValueError("The subcontractor's share has to be less than the invoice")
+        if body.get("sub_id") == "new":
+            sname, semail = (body.get("new_sub_name") or "").strip()[:120], (body.get("new_sub_email") or "").strip()[:200]
+            if not sname or not EMAIL_RE.match(semail):
+                raise ValueError("A new subcontractor needs a name and a valid PayPal email")
+            sub_id = ex("INSERT INTO subcontractors(name,email,role) VALUES(?,?,?)", (sname, semail, ""))
+        elif body.get("sub_id"):
+            sub = q1("SELECT * FROM subcontractors WHERE id=?", (int(body["sub_id"]),))
+            if not sub:
+                raise ValueError("Pick a subcontractor")
+            sub_id = sub["id"]
+        else:
+            raise ValueError("Pick who gets the share, or leave the share at 0")
+
+    auto = q1("SELECT * FROM automations WHERE template='invoice_on_completion'")
+    draft = invoice_draft(c, title, amount, due_days, None, sub_id, share if sub_id else 0)
+    draft.update({"summary": "Invoice %s %s for “%s”" % (who(c), money(amount), title),
+                  "explanation": "You sent this from the New invoice form. Terms: %d days." % due_days,
+                  "dedupe": "manual:%s" % secrets.token_hex(6), "manual": True, "owner_only": True})
+    dispatch(auto, draft)
+    p = q1("SELECT * FROM proposals WHERE dedupe=?", (draft["dedupe"],))
+    if p["status"] != "executed":
+        return  # the executor already told the owner what went wrong
+    inv = q1("SELECT * FROM invoices WHERE id=?", (json.loads(p["executed"])[0]["result"]["invoice_id"],))
+    post("bot", "**Sent:** %s %s to %s for “%s”, due %s.%s" % (
+        inv["number"], money(amount), who(c), title, nice_date(inv["due_at"]),
+        " %s gets %s once it's paid." % (q1("SELECT name FROM subcontractors WHERE id=?", (sub_id,))["name"],
+                                          money(share)) if sub_id else ""),
+        p["id"], [{"label": "Undo", "send": "undo #%d" % p["id"]}])
+
+
 def sandbox(action, body):
     with LOCK:
         ev = q1("SELECT * FROM cal_events WHERE id=?", (body.get("id"),)) if body.get("id") else None
@@ -2037,6 +2113,8 @@ def sandbox(action, body):
                      (body.get("title") or "Appointment", int(body["contact_id"]), start[:16],
                       float(body.get("amount") or 0)))
             enqueue("calendar.event_created", {"event_id": eid}, "evnew:%d" % eid)
+        elif action == "invoice/new":
+            new_invoice(body)
         elif action == "invoice/paid":
             inv = q1("SELECT * FROM invoices WHERE id=? AND status='sent'", (body["id"],))
             if inv:
@@ -2770,6 +2848,7 @@ def state():
             "now": iso(t), "now_nice": nice(t),
             "business": get_setting("business"), "currency": get_setting("currency"),
             "contacts": q("SELECT * FROM contacts ORDER BY id"),
+            "subcontractors": q("SELECT id, name, email FROM subcontractors ORDER BY id"),
             "events": q("SELECT e.*, c.name, c.company, s.name AS sub_name FROM cal_events e "
                         "LEFT JOIN contacts c ON c.id=e.contact_id LEFT JOIN subcontractors s ON s.id=e.sub_id "
                         "WHERE e.source=? ORDER BY e.start", (active_source(),)),
@@ -3029,7 +3108,7 @@ def main():
     init_db()
     threading.Thread(target=scheduler, daemon=True).start()
     server = ThreadingHTTPServer(("127.0.0.1", PORT), Handler)
-    print("Invisible Software prototype on http://localhost:%d  (Claude layer: %s)" % (PORT, LLM.status))
+    print("Living Invoice on http://localhost:%d  (Claude layer: %s)" % (PORT, LLM.status))
     try:
         server.serve_forever()
     except KeyboardInterrupt:

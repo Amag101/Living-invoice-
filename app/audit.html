@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Invisible Audit Log</title>
+<title>Audit Log</title>
 <link rel="stylesheet" href="/style.css">
 <style>
   .wrap { max-width: 1080px; margin: 0 auto; padding: 24px; display: grid; gap: 24px; }
@@ -45,7 +45,7 @@
 </head>
 <body>
 <header class="topbar">
-  <div class="brand"><span class="mark" aria-hidden="true"></span>Invisible <span class="tag">audit log</span></div>
+  <div class="brand"><span class="mark" aria-hidden="true"></span>Living Invoice <span class="tag">audit log</span></div>
   <div class="hint">Every action, why it happened, and how to reverse it. This is the only page the product keeps.</div>
   <nav><a href="/"><button>Back to demo</button></a></nav>
 </header>
@@ -124,7 +124,7 @@ async function load() {
         ${r.data.why ? `<div class="why">Why: ${esc(r.data.why)}</div>` : ""}
         ${r.data.limits && r.data.limits.length ? `<div class="why">Needs approval: ${esc(r.data.limits.join(", "))}</div>` : ""}
         ${steps || reversed || kept ? `<ul class="steps">${steps}${reversed}${kept}</ul>` : ""}</td>
-      <td>${r.actor === "owner" ? "You" : "Invisible"}</td>
+      <td>${r.actor === "owner" ? "You" : "Living Invoice"}</td>
       <td>${canUndo ? `<button class="small" data-undo="${r.proposal_id}">Undo</button>` : ""}</td>
     </tr>`;
   }).join("") || `<tr><td colspan="4" class="faint" style="text-align:center;padding:28px">No activity yet.</td></tr>`;
@@ -143,7 +143,7 @@ function renderGoogle(g) {
         <li>Download the client JSON, save it as <code>google_client.json</code> next to <code>server.py</code>, and restart the server.</li>
       </ol>`;
   } else if (!g.connected) {
-    html = `<div>Invisible will ask Google for two permissions: <strong>send email as you</strong> (it can't read your inbox) and <strong>see and edit your calendar events</strong>. Tokens are encrypted before they're stored.</div>
+    html = `<div>Living Invoice will ask Google for two permissions: <strong>send email as you</strong> (it can't read your inbox) and <strong>see and edit your calendar events</strong>. Tokens are encrypted before they're stored.</div>
       <div class="row"><a href="/oauth/google/start"><button class="primary">Connect Google</button></a></div>`;
   } else {
     const bad = g.status !== "connected";
@@ -160,7 +160,7 @@ function renderGoogle(g) {
         ${bad ? `<a href="/oauth/google/start"><button class="primary">Reconnect Google</button></a>` : `<button id="gsync">Sync now</button>`}
         <button id="gdisc">Disconnect</button>
       </div>
-      <div class="faint">To bill a job, add #done to the event title in Google Calendar. Invisible takes the client from the event's guests and the amount from its description, for example "Amount: 1200".</div>`;
+      <div class="faint">To bill a job, add #done to the event title in Google Calendar. Living Invoice takes the client from the event's guests and the amount from its description, for example "Amount: 1200".</div>`;
   }
   if ($("#google").dataset.html !== html) { $("#google").innerHTML = html; $("#google").dataset.html = html; }
 }
@@ -182,7 +182,7 @@ function showBanner(text, ok) {
 
 (function () {
   const p = new URLSearchParams(location.search);
-  if (p.get("google") === "connected") showBanner("Google connected. Invisible is now reading your calendar and sends email through Gmail.", true);
+  if (p.get("google") === "connected") showBanner("Google connected. Living Invoice is now reading your calendar and sends email through Gmail.", true);
   if (p.get("google_error")) showBanner(p.get("google_error"), false);
   if (p.toString()) history.replaceState(null, "", "/audit");
 })();
