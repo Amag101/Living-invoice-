@@ -34,6 +34,24 @@ from google_api import GoogleError
 from paypal_api import PayPalError
 
 ROOT = os.path.dirname(os.path.abspath(__file__))
+
+
+def load_env(path):
+    """KEY=value lines from .env, without overriding variables already set or setting empty ones."""
+    if not os.path.exists(path):
+        return
+    for line in open(path):
+        line = line.strip()
+        if line and not line.startswith("#") and "=" in line:
+            key, value = line.split("=", 1)
+            value = value.strip().strip('"').strip("'")
+            if value:
+                os.environ.setdefault(key.strip(), value)
+
+
+if __name__ == "__main__":  # only the running server; tests set their own environment
+    load_env(os.path.join(ROOT, ".env"))
+
 APP_DIR = os.path.join(ROOT, "app")
 DB_PATH = os.environ.get("INVISIBLE_DB", os.path.join(ROOT, "invisible.db"))
 PORT = int(os.environ.get("PORT", "8790"))
@@ -530,6 +548,10 @@ class Calendar(Connector):
         raise ValueError("calendar is read-only in this prototype")
 
 
+class RetryLater(ValueError):
+    """An undo that can't happen yet but may work shortly; the action stays undoable."""
+
+
 class Payouts(Connector):
     """Money out to subcontractors. PayPalPayouts sends it with PayPal Payouts."""
     name, label = "payouts", "Payouts (offline sandbox)"
@@ -589,7 +611,20 @@ class PayPalPayouts(Payouts):
         if op == "cancel_payout":
             row = q1("SELECT * FROM payouts WHERE id=?", (params["payout_id"],))
             if row["item_id"]:
-                client.cancel_payout_item(row["item_id"])  # PayPal refuses once the money is claimed
+                item = client.get_payout_item(row["item_id"])
+                status = item.get("transaction_status", "")
+                batch = client.get_payout_batch(row["batch_id"]).get("batch_header", {}).get("batch_status", "")
+                # PayPal cancels only unclaimed items whose whole batch has finished processing.
+                if status == "PENDING" or batch in ("PENDING", "PROCESSING"):
+                    raise RetryLater("PayPal is still processing this payout, so it can't be cancelled yet. "
+                                     "Try undo again in a minute")
+                try:
+                    client.cancel_payout_item(row["item_id"])  # PayPal refuses once the money is claimed
+                except PayPalError as e:
+                    if e.status < 500:
+                        raise
+                    raise RetryLater("PayPal couldn't cancel it just now (a PayPal-side error). Try undo again "
+                                     "later. If nobody claims it, PayPal returns unclaimed payouts after 30 days")
             ex("UPDATE payouts SET status='cancelled', updated_at=? WHERE id=?", (iso(now()), row["id"]))
             return {"payout_id": row["id"]}
         raise ValueError("unknown payouts op " + op)
@@ -1572,6 +1607,11 @@ def undo(pid, actor="owner"):
             try:
                 connector(inv["connector"]).execute(inv["op"], dict(inv["params"], proposal_id=pid))
                 reversed_labels.append(inv["label"])
+            except RetryLater as e:
+                if not reversed_labels:  # nothing changed yet, so leave the action undoable
+                    log("undo_deferred", "%s: %s" % (p["summary"], e), pid, p["automation_id"], actor)
+                    return "I couldn't undo that yet: %s. Nothing has changed." % e
+                kept.append("%s (%s)" % (s["label"], e))
             except (PayPalError, ValueError) as e:
                 kept.append("%s (%s)" % (s["label"], getattr(e, "message", None) or e))
         elif s["connector"] != "owner":

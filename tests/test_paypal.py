@@ -124,7 +124,7 @@ class PayPalClient(unittest.TestCase):
         self.assertEqual(t["amount"]["breakdown"]["discount"]["invoice_discount"]["percent"], "5")
         self.assertEqual(t["configuration"]["partial_payment"]["minimum_amount_due"]["value"], "3.00")
         back = paypal.apply_terms(t, discount_pct=0, min_due=0)
-        self.assertNotIn("discount", back["amount"]["breakdown"])
+        self.assertNotIn("amount", back)  # PayPal recalculates; stale totals sent back are refused
         self.assertFalse(back["configuration"]["partial_payment"]["allow_partial_payment"])
         self.assertEqual(base["configuration"]["partial_payment"]["allow_partial_payment"], False)
 
@@ -145,6 +145,25 @@ class PayPalInvoicing(unittest.TestCase):
         self.assertTrue(inv["payer_url"].endswith("#" + pp["id"]))
         email = s.q1("SELECT body FROM outbox ORDER BY id DESC")["body"]
         self.assertIn("https://living.example/i/%s" % inv["token"], email)
+
+    def test_terms_round_trip_from_a_real_shaped_get(self):
+        # Real PayPal returns calculated totals; sending them back after removing a discount
+        # used to fail with calculation_error.
+        inv, pp = invoice_brand_workshop()
+        acc = s.connector("accounting")
+        acc.execute("update_terms", {"invoice_id": inv["id"], "discount_pct": 5})
+        self.assertEqual(FAKE.invoices[pp["id"]]["amount"]["value"], "1140.00")
+        acc.execute("update_terms", {"invoice_id": inv["id"], "discount_pct": 0})
+        self.assertEqual(FAKE.invoices[pp["id"]]["amount"]["value"], "1200.00")
+        with self.assertRaises(PayPalError) as e:  # what the old code sent
+            stale = dict(FAKE.invoices[pp["id"]], amount={"value": "1140.00", "currency_code": "USD"})
+            s.paypal_client().update_invoice(stale)
+        self.assertEqual(e.exception.details[0]["issue"], "calculation_error")
+
+    def test_payer_link_comes_back_from_a_single_link_reply(self):
+        inv, pp = invoice_brand_workshop()
+        self.assertEqual(inv["payer_url"], pp["detail"]["metadata"]["recipient_view_url"])
+        self.assertEqual(paypal.payer_link({"href": "https://x/p", "rel": "payer-view"}), "https://x/p")
 
     def test_undo_cancels_the_paypal_invoice(self):
         inv, pp = invoice_brand_workshop()

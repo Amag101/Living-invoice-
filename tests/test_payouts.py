@@ -73,6 +73,30 @@ class Payouts(unittest.TestCase):
         self.assertEqual(row["status"], "cancelled")
         self.assertEqual(FAKE.items[row["item_id"]]["transaction_status"], "RETURNED")
 
+    def test_undo_while_paypal_is_still_processing_waits(self):
+        FAKE.hold_payouts = True
+        self.pay_in_full()
+        s.owner_message("approve")
+        self.assertEqual(s.q1("SELECT status FROM payouts")["status"], "pending")
+        s.owner_message("undo")
+        self.assertIn("I couldn't undo that yet: PayPal is still processing this payout", bot())
+        self.assertEqual(s.q1("SELECT status FROM proposals WHERE dedupe LIKE 'payout:%'")["status"], "executed")
+        FAKE.hold_payouts = False
+        s.owner_message("undo")
+        self.assertEqual(s.q1("SELECT status FROM payouts")["status"], "cancelled")
+
+    def test_paypal_error_on_cancel_leaves_the_payout_undoable(self):
+        self.pay_in_full()
+        s.owner_message("approve")
+        FAKE.fail_cancel = True
+        s.owner_message("undo")
+        self.assertIn("PayPal couldn't cancel it just now", bot())
+        self.assertIn("returns unclaimed payouts after 30 days", bot())
+        self.assertEqual(s.q1("SELECT status FROM payouts")["status"], "unclaimed")
+        FAKE.fail_cancel = False
+        s.owner_message("undo")
+        self.assertEqual(s.q1("SELECT status FROM payouts")["status"], "cancelled")
+
     def test_undo_after_the_money_is_claimed_says_so(self):
         FAKE.known_receivers.add("ada.nwosu@illustrators.example")  # Ada has PayPal: claimed at once
         self.pay_in_full()
@@ -80,7 +104,7 @@ class Payouts(unittest.TestCase):
         self.assertEqual(s.q1("SELECT status FROM payouts")["status"], "success")
         s.owner_message("undo")
         self.assertIn("Couldn't reverse", bot())
-        self.assertIn("Only unclaimed items can be cancelled", bot())
+        self.assertIn("Only items in Unclaimed status can be cancelled", bot())
         self.assertEqual(s.q1("SELECT status FROM payouts")["status"], "success")
 
     def test_payout_webhooks_update_status(self):

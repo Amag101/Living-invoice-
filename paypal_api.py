@@ -196,6 +196,9 @@ class Client:
     def get_payout_batch(self, batch_id):
         return self.call("GET", "/v1/payments/payouts/%s" % batch_id)
 
+    def get_payout_item(self, item_id):
+        return self.call("GET", "/v1/payments/payouts-item/%s" % item_id)
+
     def cancel_payout_item(self, item_id):
         """Only works while the item is UNCLAIMED; the money returns to the sender."""
         return self.call("POST", "/v1/payments/payouts-item/%s/cancel" % item_id, {})
@@ -241,12 +244,16 @@ def apply_terms(invoice, discount_pct=None, min_due=None, due_date=None):
     a discount of 0 or a min_due of 0 removes it."""
     inv = json.loads(json.dumps(invoice))
     currency = inv["detail"]["currency_code"]
-    if discount_pct is not None:
-        breakdown = inv.setdefault("amount", {}).setdefault("breakdown", {})
-        if discount_pct:
-            breakdown["discount"] = {"invoice_discount": {"percent": "%g" % discount_pct}}
-        else:
-            breakdown.pop("discount", None)
+    # A GET returns PayPal's own calculated totals. Sent back after the terms change they no
+    # longer add up (PayPal answers calculation_error), so only the discount percent goes back
+    # and PayPal recalculates. Read-only parts of a GET are dropped for the same reason.
+    for key in ("due_amount", "payments", "refunds", "links", "status"):
+        inv.pop(key, None)
+    if discount_pct is None:
+        discount_pct = current_discount(invoice)
+    inv.pop("amount", None)
+    if discount_pct:
+        inv["amount"] = {"breakdown": {"discount": {"invoice_discount": {"percent": "%g" % discount_pct}}}}
     if min_due is not None:
         if min_due:
             inv["configuration"]["partial_payment"] = {"allow_partial_payment": True,
@@ -258,11 +265,19 @@ def apply_terms(invoice, discount_pct=None, min_due=None, due_date=None):
     return inv
 
 
-def payer_link(send_response):
-    for link in send_response.get("links", []):
-        if link.get("rel") in ("payer-view", "payer_view"):
+def current_discount(invoice):
+    pct = (invoice.get("amount", {}).get("breakdown", {}).get("discount", {})
+           .get("invoice_discount", {}).get("percent"))
+    return float(pct) if pct else 0
+
+
+def payer_link(send_response, invoice=None):
+    """Sending replies with the payer's link on its own ({"href", "rel": "payer-view"}) or in a list."""
+    links = send_response.get("links") or [send_response]
+    for link in links:
+        if link.get("rel") in ("payer-view", "payer_view") and link.get("href"):
             return link["href"]
-    return None
+    return ((invoice or {}).get("detail", {}).get("metadata", {}).get("recipient_view_url"))
 
 
 def capture_of(order):

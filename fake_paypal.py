@@ -65,6 +65,8 @@ class Fake:
         self.webhook_id = "WH-FAKE-1"
         self.signatures = {}
         self.known_receivers = set()  # payout receivers with a PayPal account claim at once
+        self.hold_payouts = False   # keep payouts PENDING, as PayPal does while it processes them
+        self.fail_cancel = False    # PayPal's sandbox answers payout cancels with a 500
         self.fail_next = None       # (status, body) returned by the next API call
         self.calls = []
 
@@ -99,6 +101,12 @@ class Fake:
         else:
             inv["status"] = "PARTIALLY_PAID"
         return pid
+
+    def settle(self, item):
+        if item["transaction_status"] == "PENDING" and item.get("_settles_to") and not self.hold_payouts:
+            item["transaction_status"] = item.pop("_settles_to")
+            self.emit("PAYMENT.PAYOUTS-ITEM." + ("SUCCEEDED" if item["transaction_status"] == "SUCCESS"
+                                                  else "UNCLAIMED"), item)
 
     # ---- webhooks --------------------------------------------------------
 
@@ -263,7 +271,12 @@ class Handler(BaseHTTPRequestHandler):
                 new = json.loads(json.dumps(body))
                 new.update(keep)
                 new["detail"].setdefault("metadata", inv["detail"].get("metadata", {}))
+                stated = (body.get("amount") or {}).get("value")
                 total, paid = FAKE.total(new)
+                # Like PayPal: a stated total that disagrees with the items and discount is refused.
+                if stated is not None and _cents(stated) != total:
+                    raise ApiError(400, "INVALID_REQUEST", "Request is not well-formed, syntactically incorrect, "
+                                   "or violates schema.", "calculation_error")
                 if paid > total:
                     raise unprocessable("INVALID_AMOUNT", "Invoice total can't be lower than the amount paid.")
                 FAKE.invoices[inv["id"]] = new
@@ -272,8 +285,9 @@ class Handler(BaseHTTPRequestHandler):
                 if inv["status"] != "DRAFT":
                     raise unprocessable("INVALID_INVOICE_STATUS", "Only a draft can be sent.")
                 inv["status"] = "SENT"
-                return 200, {"links": [{"rel": "payer-view", "method": "GET",
-                                        "href": "%s/invoice/p/#%s" % (self.base(), inv["id"])}]}
+                view = "%s/invoice/p/#%s" % (self.base(), inv["id"])
+                inv["detail"].setdefault("metadata", {})["recipient_view_url"] = view
+                return 200, {"href": view, "rel": "payer-view", "method": "GET"}  # one link, as PayPal sends it
             if action == "cancel":
                 if inv["status"] not in ("SENT", "UNPAID", "SCHEDULED"):
                     raise unprocessable("CANNOT_CANCEL_INVOICE", "Invoice in %s state can't be cancelled." % inv["status"])
@@ -340,29 +354,42 @@ class Handler(BaseHTTPRequestHandler):
                 raise ApiError(400, "USER_BUSINESS_ERROR", "Batch with given sender_batch_id already exists",
                                "DUPLICATE_REQUEST_ID")
             bid = _id("", 13)
-            batch = {"batch_header": {"payout_batch_id": bid, "batch_status": "SUCCESS",
+            batch = {"batch_header": {"payout_batch_id": bid, "batch_status": "PROCESSING",
                                       "sender_batch_header": header, "time_created": _now()}, "items": []}
             for item in body.get("items", []):
                 iid = _id("", 13)
-                status = "SUCCESS" if item["receiver"] in FAKE.known_receivers else "UNCLAIMED"
-                row = {"payout_item_id": iid, "transaction_status": status, "payout_batch_id": bid,
-                       "payout_item": json.loads(json.dumps(item)), "time_processed": _now()}
+                # PayPal processes payouts after replying: items start PENDING and settle later
+                # (here, the next time anyone looks at them).
+                row = {"payout_item_id": iid, "transaction_status": "PENDING", "payout_batch_id": bid,
+                       "payout_item": json.loads(json.dumps(item)), "time_processed": _now(),
+                       "_settles_to": "SUCCESS" if item["receiver"] in FAKE.known_receivers else "UNCLAIMED"}
                 FAKE.items[iid] = row
                 batch["items"].append(row)
-                FAKE.emit("PAYMENT.PAYOUTS-ITEM." + ("SUCCEEDED" if status == "SUCCESS" else "UNCLAIMED"), row)
             FAKE.batches[bid] = batch
             return 201, {"batch_header": dict(batch["batch_header"], batch_status="PENDING")}
         if parts[:3] == ["v1", "payments", "payouts"] and len(parts) == 4 and method == "GET":
             batch = FAKE.batches.get(parts[3])
             if not batch:
                 raise ApiError(404, "RESOURCE_NOT_FOUND", "Batch not found.", "INVALID_RESOURCE_ID")
+            for row in batch["items"]:
+                FAKE.settle(row)
+            if not FAKE.hold_payouts:
+                batch["batch_header"]["batch_status"] = "SUCCESS"
             return 200, batch
+        if parts[:3] == ["v1", "payments", "payouts-item"] and len(parts) == 4 and method == "GET":
+            item = FAKE.items.get(parts[3])
+            if not item:
+                raise ApiError(404, "RESOURCE_NOT_FOUND", "Item not found.", "INVALID_RESOURCE_ID")
+            FAKE.settle(item)
+            return 200, item
         if parts[:3] == ["v1", "payments", "payouts-item"] and len(parts) == 5 and parts[4] == "cancel":
             item = FAKE.items.get(parts[3])
             if not item:
                 raise ApiError(404, "RESOURCE_NOT_FOUND", "Item not found.", "INVALID_RESOURCE_ID")
+            if FAKE.fail_cancel:
+                raise ApiError(500, "INTERNAL_SERVICE_ERROR", "An internal service error has occurred")
             if item["transaction_status"] != "UNCLAIMED":
-                raise ApiError(400, "ITEM_ALREADY_CLAIMED", "Only unclaimed items can be cancelled.")
+                raise ApiError(400, "ITEM_INCORRECT_STATUS", "Only items in Unclaimed status can be cancelled.")
             item["transaction_status"] = "RETURNED"
             FAKE.emit("PAYMENT.PAYOUTS-ITEM.RETURNED", item)
             return 200, item
